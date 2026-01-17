@@ -32,7 +32,6 @@ class MiniStatus(QLabel):
         screen = QApplication.primaryScreen().geometry()
         self.move(screen.width() - self.width() - 20, 10)
 
-        # Click to toggle back
         self.setCursor(Qt.PointingHandCursor)
         self.mousePressEvent = lambda e: parent.toggle_mini_mode()
 
@@ -56,15 +55,15 @@ class AutoClicker(QMainWindow):
         self.tabs = None
         self.mini_status = None
         self.main_visible = True
+        self.f12_listener = None
 
         self.setup_window()
         self.setup_tray()
         self.load_settings()
 
         # Global F12 listener
-        self.f12_listener = keyboard.GlobalHotKeys({
-            '<f12>': self.toggle_mini_mode
-        })
+        from pynput.keyboard import GlobalHotKeys
+        self.f12_listener = GlobalHotKeys({'<f12>': self.toggle_mini_mode})
         self.f12_listener.start()
 
         QTimer.singleShot(500, self.setup_hotkey_listener)
@@ -116,11 +115,11 @@ class AutoClicker(QMainWindow):
         menu = QMenu()
         show = QAction("Show Main", self)
         show.triggered.connect(self.show_main)
-        quit = QAction("Quit", self)
-        quit.triggered.connect(qApp.quit)
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self.full_quit)
 
         menu.addAction(show)
-        menu.addAction(quit)
+        menu.addAction(quit_action)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.tray_clicked)
         self.tray.show()
@@ -132,15 +131,14 @@ class AutoClicker(QMainWindow):
     def show_main(self):
         if self.mini_status:
             self.mini_status.hide()
-        self.showNormal()  # force normal show
+        self.showNormal()
         self.activateWindow()
         self.raise_()
         self.main_visible = True
 
+    @pyqtSlot()
     def toggle_mini_mode(self):
-        print("F12 pressed - toggling mode")
         if self.main_visible:
-            print("Hiding main, showing mini")
             self.hide()
             if not self.mini_status:
                 self.mini_status = MiniStatus()
@@ -148,13 +146,59 @@ class AutoClicker(QMainWindow):
             self.mini_status.raise_()
             self.main_visible = False
         else:
-            print("Hiding mini, showing main")
             if self.mini_status:
                 self.mini_status.hide()
             self.showNormal()
             self.activateWindow()
             self.raise_()
             self.main_visible = True
+
+    def full_quit(self):
+        self.close()
+        QApplication.quit()
+        sys.exit(0)
+
+    def closeEvent(self, event):
+        self.clicking = False
+        self.macro_running = False
+        self.recording = False
+        self.stop_event.set()
+
+        # Stop threads
+        for t in [self.click_thread, self.macro_thread]:
+            if t and t.is_alive():
+                t.join(timeout=1.0)
+
+        # Stop ALL listeners
+        for l in [
+            self.hotkey_kb_listener,
+            self.hotkey_mouse_listener,
+            self.record_mouse,
+            self.record_kb,
+            self.f12_listener
+        ]:
+            if l:
+                try:
+                    l.stop()
+                except:
+                    pass
+
+        self.save_settings()
+
+        # Clean tray
+        if hasattr(self, 'tray') and self.tray:
+            self.tray.hide()
+            self.tray = None
+
+        # Clean mini
+        if self.mini_status:
+            self.mini_status.hide()
+            self.mini_status.deleteLater()
+            self.mini_status = None
+
+        event.accept()
+        QApplication.quit()
+        sys.exit(0)
 
     def make_clicker_tab(self, tabs):
         tab = QWidget()
@@ -740,20 +784,6 @@ class AutoClicker(QMainWindow):
             self.speed_box.setValue(s.get('speed', 1.0))
         except:
             pass
-
-    def closeEvent(self, event):
-        self.clicking = False
-        self.macro_running = False
-        self.recording = False
-        self.stop_event.set()
-        self.save_settings()
-
-        for l in [self.hotkey_kb_listener, self.hotkey_mouse_listener,
-                  self.record_mouse, self.record_kb, self.f12_listener]:
-            if l:
-                try: l.stop()
-                except: pass
-        event.accept()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
